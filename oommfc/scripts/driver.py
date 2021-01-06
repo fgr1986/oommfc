@@ -1,10 +1,12 @@
+import numpy as np
 import oommfc as oc
 import micromagneticmodel as mm
 
 
-def driver_script(driver, system, compute=None, **kwargs):
+def driver_script(driver, system, fixed_subregions=None, compute=None,
+                  output_step=False, **kwargs):
     mif = ''
-    if isinstance(driver, oc.MinDriver):
+    if isinstance(driver, oc.HysteresisDriver):
         # Check evolver and set default if not passed.
         if not hasattr(driver, 'evolver'):
             driver.evolver = oc.CGEvolver()
@@ -17,7 +19,22 @@ def driver_script(driver, system, compute=None, **kwargs):
         if not hasattr(driver, 'stopping_mxHxm'):
             driver.stopping_mxHxm = 0.1
 
+        # Fixed spins
+        if fixed_subregions is not None:
+            resstr = f'{{main_atlas {" ".join(fixed_subregions)}}}'
+            driver.evolver.fixed_spins = resstr
+
         mif += oc.scripts.evolver_script(driver.evolver)
+
+        # Oxs_UZeeman
+        Hmin, Hmax, n = kwargs['Hmin'], kwargs['Hmax'], kwargs['n']
+        mif += '# OxS_UZeeman\n'
+        mif += 'Specify Oxs_UZeeman {\n'
+        mif += '  Hrange {\n'
+        mif += '    {{ {} {} {} {} {} {} {} }}\n'.format(*Hmin, *Hmax, n-1)
+        mif += '    {{ {} {} {} {} {} {} {} }}\n'.format(*Hmax, *Hmin, n-1)
+        mif += '  }\n'
+        mif += '}\n\n'
 
         # Minimisation driver script.
         mif += '# MinDriver\n'
@@ -36,6 +53,50 @@ def driver_script(driver, system, compute=None, **kwargs):
         mif += 'Destination mags mmArchive\n\n'
         mif += 'Schedule DataTable table Stage 1\n'
         mif += 'Schedule Oxs_MinDriver::Magnetization mags Stage 1'
+
+    if isinstance(driver, oc.MinDriver):
+        # Check evolver and set default if not passed.
+        if not hasattr(driver, 'evolver'):
+            driver.evolver = oc.CGEvolver()
+        elif not isinstance(driver.evolver, oc.CGEvolver):
+            msg = f'Cannot use {type(driver.evolver)} for evolver.'
+            raise TypeError(msg)
+
+        # Define default stopping_mxHxm if not passed. OOMMF cannot run without
+        # this value.
+        if not hasattr(driver, 'stopping_mxHxm'):
+            driver.stopping_mxHxm = 0.1
+
+        # Fixed spins
+        if fixed_subregions is not None:
+            resstr = f'{{main_atlas {" ".join(fixed_subregions)}}}'
+            driver.evolver.fixed_spins = resstr
+
+        # What is saved in output?
+        if output_step:
+            output_str = 'Step'
+        else:
+            output_str = 'Stage'
+
+        mif += oc.scripts.evolver_script(driver.evolver)
+
+        # Minimisation driver script.
+        mif += '# MinDriver\n'
+        mif += 'Specify Oxs_MinDriver {\n'
+        mif += '  evolver :evolver\n'
+        mif += '  mesh :mesh\n'
+        mif += '  Ms :m0_norm\n'
+        mif += '  m0 :m0\n'
+        for attr, value in driver:
+            if attr != 'evolver':
+                mif += f'  {attr} {value}\n'
+        mif += '}\n\n'
+
+        # Saving results.
+        mif += 'Destination table mmArchive\n'
+        mif += 'Destination mags mmArchive\n\n'
+        mif += f'Schedule DataTable table {output_str} 1\n'
+        mif += f'Schedule Oxs_MinDriver::Magnetization mags {output_str} 1'
 
     if isinstance(driver, oc.TimeDriver):
         # Check evolver and set default if not passed.
@@ -71,6 +132,11 @@ def driver_script(driver, system, compute=None, **kwargs):
             driver.evolver.P = system.dynamics.slonczewski.P
             driver.evolver.Lambda = system.dynamics.slonczewski.Lambda
             driver.evolver.eps_prime = system.dynamics.slonczewski.eps_prime
+
+        # Fixed spins
+        if fixed_subregions is not None:
+            resstr = f'{{main_atlas {" ".join(fixed_subregions)}}}'
+            driver.evolver.fixed_spins = resstr
 
         mif += oc.scripts.evolver_script(driver.evolver)
 
